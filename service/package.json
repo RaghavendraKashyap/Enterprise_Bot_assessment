@@ -1,0 +1,13 @@
+{
+  "name": "http-service",
+  "version": "1.0.0",
+  "description": "HTTP service",
+  "main": "src/solution.js",
+  "scripts": {
+    "start": "node --watch src/solution.js"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "express": "^5.1.0"
+  }
+}

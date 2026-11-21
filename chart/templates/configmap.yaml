@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMap.name }}
+  labels:
+    {{- .Values.labels | toYaml | nindent 4 }}
+
+data:
+  APP_NAME: {{ .Values.config.appName | quote }}
+  VERSION: {{ .Values.config.version | quote }}
+  PORT: {{ .Values.config.port | quote }}

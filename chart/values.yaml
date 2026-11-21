@@ -1,0 +1,49 @@
+
+# keeping replication count to 2 as per part 2 of the assessment.
+replicaCount: 2
+
+deployment:
+  name: enterprisebot-deployment
+
+container:
+  name: enterprisebot-container
+
+image:
+  repository: enterprisebot
+  tag: "v1"
+  pullPolicy: IfNotPresent
+
+# coonfigmap configuration
+configMap:
+  name: enterprisebot-config
+
+config:
+  appName: enterprisebot
+  version: "1.0.0"
+  port: "8080"
+
+#service configuration
+service:
+  name: enterprisebot-service
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# Ingress configuration
+ingress:
+  name: enterprisebot-ingress
+  host: demo.local
+
+# Common labels
+labels:
+  app: enterprisebot
+  environment: dev
+
+# Container resource allocation
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
