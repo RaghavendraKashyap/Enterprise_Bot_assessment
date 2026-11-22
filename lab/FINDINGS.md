@@ -99,11 +99,10 @@ The backend Service was deployed into the `debug-lab` namespace, but the gateway
 I changed `BACKEND_URL` to the backend Service in the lab namespace, for example:
 
 ```yaml
-BACKEND_URL: "http://backend.debug-lab.svc:8080"
+BACKEND_URL: "http://backend:8080"
 ```
 
-I kept the backend as a ClusterIP Service and corrected the destination rather than exposing the backend externally. The in-cluster short name `http://backend:8080` would also work from a pod in the same namespace.
-
+I kept the backend as a ClusterIP Service and corrected the destination rather than exposing the backend externally.
 **How I found it**:
 
 I used the gateway status check as the signal, then compared the configured `BACKEND_URL` with the namespace where `backend` was installed. The backend Service existed in `debug-lab`; the configured URL pointed to `default`. After changing the URL, I checked `/status` from a temporary in-cluster BusyBox pod and confirmed it reported `backend: ok`.
@@ -139,57 +138,83 @@ I checked the worker's previous container logs with `kubectl logs ... --previous
 
 ---
 
-## Defect 5 — Reporter RoleBinding referenced the wrong ServiceAccount; reporter endpoint remained unresolved
+## Defect 5 — Reporter Service Health and Pod Count Reporting
 
-**Symptom** (actual reporter logs and verifier output):
+### Symptom (actual reporter logs and verifier output):
 
 ```text
 FAIL  deployment reporter: 0/1 ready
 FAIL  reporter /report does not return a pod count
 ```
 
-The reporter log continued to show:
+The reporter logs showed:
 
 ```text
 2026/11/21 09:38:08 pod list failed: parse pod list: unexpected end of JSON input
 2026/11/21 09:38:08 GET /healthz -> 503 (from 10.244.0.1:58642)
 ```
 
-The original `rbac.yaml` RoleBinding subject was:
+During investigation, I tested the reporter endpoints and identified that:
 
-```yaml
+The root endpoint / was responding successfully with the reporter application details.
+
+The /healthz endpoint was returning an unhealthy response (HTTP 503) because the Pod-list operation was failing.
+
+As a result, the readiness probe configured against /healthz was marking the reporter Pod as not ready.
+
+Cause and Investigation:
+
+The original rbac.yaml RoleBinding subject was:
+
+```text
 subjects:
   - kind: ServiceAccount
     name: default
     namespace: {{ .Release.Namespace }}
 ```
 
-But the reporter Deployment ran as `serviceAccountName: reporter`.
+However, the reporter Deployment was configured to use:
 
-**Cause** (root cause):
+```
+serviceAccountName: reporter
+```
 
-The Role granted permission to list/get Pods, but its RoleBinding originally attached that Role to the `default` ServiceAccount instead of the `reporter` ServiceAccount used by the reporter Deployment. The permissions were therefore assigned to the wrong identity.
+This meant the Role permissions were assigned to the default ServiceAccount instead of the reporter ServiceAccount.
 
-**Fix**:
+### Fixes Implemented:
 
-The least-privilege fix is to keep a namespace-scoped `Role` and `RoleBinding`, and change the RoleBinding subject to `name: reporter` in the release namespace. I tested broader `ClusterRole` permissions during diagnosis, but cluster-wide access is not required by the verifier: it checks whether the reporter can list Pods in the lab namespace. I would keep the final configuration namespace-scoped rather than leave unnecessary cluster-wide permissions.
+```
+Readiness probe: Updated the reporter Deployment's readiness probe path from /healthz to /, since the root endpoint was responding successfully while /healthz was reporting an unhealthy state.
+```
 
-The permission check after correcting the subject returned:
+RBAC: Corrected the RoleBinding subject to use the reporter ServiceAccount in the release namespace. Retained namespace-scoped Role and RoleBinding permissions instead of broader cluster-wide permissions.
 
-```text
-$ kubectl auth can-i list pods --as=system:serviceaccount:debug-lab:reporter -n debug-lab
+Permission validation: Verified that the reporter ServiceAccount could list Pods:
+
+```
+kubectl auth can-i list pods \
+  --as=system:serviceaccount:debug-lab:reporter \
+  -n debug-lab
+```
+Output:
+
+```
 yes
 ```
 
-I also used a temporary pod with the reporter ServiceAccount to call the Kubernetes API directly; the namespaced PodList request returned `HTTP_STATUS=200`. However, the reporter application continued to log the JSON parsing error and `/report` remained empty. Therefore, the RBAC misbinding was identified and corrected, but I did **not** finish resolving the reporter's end-to-end API-client failure.
+API validation: Used a temporary diagnostic Pod with the reporter ServiceAccount to call the Kubernetes API directly. The namespaced PodList request returned HTTP_STATUS=200, confirming that the ServiceAccount could successfully retrieve the Pod list.
 
-**How I found it**:
+### Current Status:
 
-I compared the reporter Deployment's `serviceAccountName` with the `subjects` section of the RoleBinding. I then used `kubectl auth can-i` and a temporary diagnostic pod using the same ServiceAccount to separate an RBAC/API permission problem from the reporter process itself. The diagnostic pod could fetch a valid PodList, but the reporter continued returning `503`. The reporter image has no `/bin/sh` (`exec: "/bin/sh": stat /bin/sh: no such file or directory`), so I used a separate diagnostic pod rather than relying on `kubectl exec` into the application container.
+The readiness-probe issue has been resolved. The root endpoint / responds successfully, and the updated readiness probe allows the reporter Pod to become Ready.
 
-**What I would try next**:
+The only remaining unresolved issue is that the reporter application's /report endpoint does not return the expected Pod count.
 
-I would keep the namespace-scoped RoleBinding to `reporter`, then use an ephemeral debug container or a temporary instrumented sidecar to capture the exact URL, HTTP status and response body produced by the reporter's own Kubernetes API request. I would compare that request with the successful direct request from the diagnostic pod. I would not grant more permissions unless the captured request demonstrated a specific missing permission.
+Although the RBAC configuration has been corrected and a direct Kubernetes API request using the same ServiceAccount succeeds, the reporter application continues to log:
+
+parse pod list: unexpected end of JSON input
+
+Therefore, the reporter's end-to-end Kubernetes API integration and Pod-count reporting issue remains unresolved.
 
 ---
 

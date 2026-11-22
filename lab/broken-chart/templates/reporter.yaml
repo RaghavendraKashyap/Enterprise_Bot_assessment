@@ -35,7 +35,7 @@ spec:
             {{- end }}
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /
               port: {{ .Values.common.port }}
             initialDelaySeconds: 3
             periodSeconds: 5
